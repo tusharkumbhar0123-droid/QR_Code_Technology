@@ -1,0 +1,232 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Code Technology</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="container">
+    <h1>QR Code Technology</h1>
+    <p>Generate a QR code from your text or URL.</p>
+
+    <!-- QR Generator -->
+    <form id="qrForm">
+        <input type="text" id="qrText"
+               placeholder="Enter text or website URL" required>
+        <button type="submit">Generate QR Code</button>
+    </form>
+    <div id="result"></div>
+
+    <hr>
+
+    <!-- Image Scanner -->
+    <h2>Scan a QR Code</h2>
+    <p>Upload a QR code image to read its contents.</p>
+
+    <form id="scanForm">
+        <input type="file" id="qrImage" accept="image/*" required>
+        <button type="submit">Scan QR Code</button>
+    </form>
+    <div id="scanResult"></div>
+
+    <hr>
+
+    <!-- Live Camera Scanner -->
+    <h2>Live Camera Scanner</h2>
+    <p>Allow camera access and point it at a QR code.</p>
+
+    <video id="cameraPreview" autoplay playsinline
+           style="display:none; width:100%; border-radius:10px;"></video>
+
+    <button type="button" id="startCamera">Start Camera</button>
+    <button type="button" id="stopCamera" style="display:none;">
+        Stop Camera
+    </button>
+
+    <div id="cameraResult"></div>
+</div>
+
+<!-- Load the QR decoder before our JavaScript -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+
+<script>
+// QR GENERATOR
+const form = document.getElementById("qrForm");
+const result = document.getElementById("result");
+
+form.addEventListener("submit", async function(event) {
+    event.preventDefault();
+
+    const text = document.getElementById("qrText").value.trim();
+    result.textContent = "Generating QR code...";
+
+    try {
+        const response = await fetch("/api/generate", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({text: text})
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || "Generation failed.");
+        }
+
+        const imageBlob = await response.blob();
+        const imageURL = URL.createObjectURL(imageBlob);
+        result.replaceChildren();
+
+        const image = document.createElement("img");
+        image.src = imageURL;
+        image.alt = "Generated QR code";
+        image.width = 220;
+
+        const download = document.createElement("a");
+        download.href = imageURL;
+        download.download = "qr-code.png";
+        download.textContent = "Download QR Code";
+
+        result.append(image, document.createElement("br"), download);
+    } catch (error) {
+        result.textContent = "Error: " + error.message;
+    }
+});
+
+// IMAGE UPLOAD SCANNER
+const scanForm = document.getElementById("scanForm");
+const scanResult = document.getElementById("scanResult");
+
+scanForm.addEventListener("submit", async function(event) {
+    event.preventDefault();
+
+    const file = document.getElementById("qrImage").files[0];
+    if (!file) {
+        scanResult.textContent = "Please select a QR code image.";
+        return;
+    }
+
+    scanResult.textContent = "Scanning QR code...";
+    const formData = new FormData();
+    formData.append("image", file);
+
+    try {
+        const response = await fetch("/api/scan", {
+            method: "POST",
+            body: formData
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || "Scanning failed.");
+        }
+
+        scanResult.textContent = "QR Code Result: " + data.text;
+    } catch (error) {
+        scanResult.textContent = "Error: " + error.message;
+    }
+});
+
+// LIVE CAMERA SCANNER
+const cameraPreview = document.getElementById("cameraPreview");
+const startCameraButton = document.getElementById("startCamera");
+const stopCameraButton = document.getElementById("stopCamera");
+const cameraResult = document.getElementById("cameraResult");
+
+let cameraStream = null;
+let cameraActive = false;
+
+const cameraCanvas = document.createElement("canvas");
+const cameraContext = cameraCanvas.getContext("2d", {
+    willReadFrequently: true
+});
+
+startCameraButton.addEventListener("click", async function() {
+    if (!window.jsQR) {
+        cameraResult.textContent =
+            "QR decoder failed to load. Check your internet connection and refresh.";
+        return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        cameraResult.textContent = "Camera is not supported in this browser.";
+        return;
+    }
+
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: {facingMode: "environment"},
+            audio: false
+        });
+
+        cameraPreview.srcObject = cameraStream;
+        cameraPreview.style.display = "block";
+        await cameraPreview.play();
+
+        cameraActive = true;
+        startCameraButton.style.display = "none";
+        stopCameraButton.style.display = "block";
+        cameraResult.textContent = "Camera active. Point it at a QR code.";
+
+        scanCameraFrame();
+    } catch (error) {
+        stopCamera();
+        cameraResult.textContent =
+            "Camera access failed. Allow camera permission and try again.";
+    }
+});
+
+stopCameraButton.addEventListener("click", stopCamera);
+
+function stopCamera() {
+    cameraActive = false;
+
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
+    }
+
+    cameraPreview.srcObject = null;
+    cameraPreview.style.display = "none";
+    startCameraButton.style.display = "block";
+    stopCameraButton.style.display = "none";
+}
+
+function scanCameraFrame() {
+    if (!cameraActive) return;
+
+    if (cameraPreview.readyState >= 2 &&
+        cameraPreview.videoWidth > 0) {
+
+        cameraCanvas.width = cameraPreview.videoWidth;
+        cameraCanvas.height = cameraPreview.videoHeight;
+
+        cameraContext.drawImage(
+            cameraPreview, 0, 0,
+            cameraCanvas.width, cameraCanvas.height
+        );
+
+        const frame = cameraContext.getImageData(
+            0, 0, cameraCanvas.width, cameraCanvas.height
+        );
+
+        const code = jsQR(
+            frame.data, frame.width, frame.height
+        );
+
+        if (code && code.data) {
+            cameraResult.textContent = "Scanned result: " + code.data;
+            stopCamera();
+            return;
+        }
+    }
+
+    if (cameraActive) {
+        requestAnimationFrame(scanCameraFrame);
+    }
+}
+</script>
+</body>
+</html>
